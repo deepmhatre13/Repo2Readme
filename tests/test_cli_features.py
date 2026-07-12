@@ -72,7 +72,7 @@ def test_dry_run_shows_skipped_files(monkeypatch, tmp_path):
     assert "Skipped Files Summary" in result.output
     assert "excluded by pattern" in result.output
     assert "exceeds maximum file size" in result.output
-
+    assert "ignored by default rules" in result.output
 
 def test_dry_run_shows_unknown_skip_reasons(monkeypatch, tmp_path):
     file1 = tmp_path / "main.py"

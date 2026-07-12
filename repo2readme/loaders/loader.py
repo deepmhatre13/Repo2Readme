@@ -24,12 +24,14 @@ class LocalRepoLoader:
     def _should_include(self, path: str) -> bool:
         relative_path = os.path.relpath(path, self.folder_path).replace("\\", "/")
 
+        size_limit = None if os.path.isdir(path) else self.max_file_size_kb
+
         allowed, _ = github_file_filter(
             relative_path,
             include_patterns=self.include_patterns,
             exclude_patterns=self.exclude_patterns,
             root_path=self.folder_path,
-            max_file_size_kb=self.max_file_size_kb,
+            max_file_size_kb=size_limit,
         )
         return allowed
 
@@ -41,11 +43,25 @@ class LocalRepoLoader:
         skipped: list[tuple[str, str]] = [] if return_skip_info else []
 
         for current, dirs, files in os.walk(self.folder_path):
-            dirs[:] = [
-                directory
-                for directory in dirs
-                if self._should_include(os.path.join(current, directory))
-            ]
+            new_dirs = []
+            for directory in dirs:
+                full_dir_path = os.path.join(current, directory)
+                rel_dir_path = os.path.relpath(full_dir_path, self.folder_path).replace("\\", "/")
+
+                allowed, reason = github_file_filter(
+                    rel_dir_path,
+                    include_patterns=self.include_patterns,
+                    exclude_patterns=self.exclude_patterns,
+                    root_path=self.folder_path,
+                    max_file_size_kb=None,
+                )
+
+                if allowed:
+                    new_dirs.append(directory)
+                elif return_skip_info:
+                    skipped.append((rel_dir_path + "/", reason))
+
+            dirs[:] = new_dirs
 
             for file_name in files:
                 full_path = os.path.join(current, file_name)
@@ -110,12 +126,14 @@ class UrlRepoLoader:
         else:
             relative_path = path.replace("\\", "/")
 
+        size_limit = None if os.path.isdir(path) else self.max_file_size_kb
+
         allowed, _ = github_file_filter(
             relative_path,
             include_patterns=self.include_patterns,
             exclude_patterns=self.exclude_patterns,
             root_path=self.temp_dir,
-            max_file_size_kb=self.max_file_size_kb,
+            max_file_size_kb=size_limit,
         )
         return allowed
 
