@@ -108,8 +108,13 @@ def run(url, local, output, force, include_patterns, exclude_patterns, max_file_
                 skip_reasons[reason] += 1
             rprint("\n[bold]Skipped Files Summary[/bold]\n")
             reason_order = ["excluded by pattern", "ignored by default rules", "exceeds maximum file size", "protected large file"]
+            printed = set()
             for reason in reason_order:
                 if reason in skip_reasons:
+                    printed.add(reason)
+                    rprint(f"{reason:30s}: {skip_reasons[reason]}")
+            for reason in sorted(skip_reasons):
+                if reason not in printed:
                     rprint(f"{reason:30s}: {skip_reasons[reason]}")
         rprint("\n[bold]Repository Analysis[/bold]\n")
         rprint(f"Files selected     : {total_documents}")

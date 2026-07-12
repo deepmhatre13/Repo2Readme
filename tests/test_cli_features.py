@@ -1,5 +1,7 @@
 import importlib
+import os
 from click.testing import CliRunner
+import pytest
 
 cli_main = importlib.import_module("repo2readme.cli.main")
 
@@ -70,6 +72,37 @@ def test_dry_run_shows_skipped_files(monkeypatch, tmp_path):
     assert "Skipped Files Summary" in result.output
     assert "excluded by pattern" in result.output
     assert "exceeds maximum file size" in result.output
+
+
+def test_dry_run_shows_unknown_skip_reasons(monkeypatch, tmp_path):
+    file1 = tmp_path / "main.py"
+    file1.write_text("print('hello')", encoding="utf-8")
+
+    import repo2readme.loaders.repo_loader as rl_module
+    original_load = rl_module.RepoLoader.load
+
+    def fake_load(self, return_skip_info=False):
+        docs, root_path, loader = original_load(self, return_skip_info=False)
+        skipped = [
+            ("README.md", "excluded by pattern"),
+            ("custom.txt", "my custom reason"),
+        ] if return_skip_info else []
+        if return_skip_info:
+            return docs, root_path, loader, skipped
+        return docs, root_path, loader
+
+    monkeypatch.setattr(rl_module.RepoLoader, "load", fake_load)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli_main.main,
+        ["run", "--local", str(tmp_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert "Skipped Files Summary" in result.output
+    assert "excluded by pattern" in result.output
+    assert "my custom reason" in result.output
 
 
 def test_normal_run_user_declines(monkeypatch, tmp_path):
