@@ -1,10 +1,9 @@
 import tempfile
+import subprocess
 from unittest.mock import MagicMock, patch
-
 import pytest
-from langchain_core.documents import Document
-
 from repo2readme.loaders.loader import LocalRepoLoader, UrlRepoLoader
+
 
 @pytest.fixture
 def url_loader():
@@ -98,6 +97,47 @@ def test_local_load_skips_failed_file(mock_filter, mock_textloader, tmp_path):
     assert docs == []
 
 
+@patch("repo2readme.loaders.loader.github_file_filter")
+def test_local_load_returns_skipped_info(mock_filter, tmp_path):
+    def filter_side_effect(path, *args, **kwargs):
+        if path == "node_modules":
+            return (False, "ignored by default rules")
+        elif path == "node_modules/package.json":
+            return (False, "ignored by default rules")
+        elif path == "large.py":
+            return (False, "exceeds maximum file size")
+        elif path == "README.md":
+            return (False, "excluded by pattern")
+        return (True, "")
+
+    mock_filter.side_effect = filter_side_effect
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    (repo_dir / "README.md").write_text("# README", encoding="utf-8")
+    
+    large_file = repo_dir / "large.py"
+    large_file.write_text("x" * 2000, encoding="utf-8")
+    
+    node_modules = repo_dir / "node_modules"
+    node_modules.mkdir()
+    (node_modules / "package.json").write_text("{}", encoding="utf-8")
+
+    loader = LocalRepoLoader(str(repo_dir), max_file_size_kb=1, exclude_patterns=["*.md"])
+    docs, root, skipped = loader.load(return_skip_info=True)
+
+    assert len(docs) == 1
+    assert docs[0].metadata["relative_path"] == "main.py"
+    
+    # node_modules/ is pruned, so package.json inside is never encountered
+    assert len(skipped) == 3
+    assert ("node_modules/", "ignored by default rules") in skipped
+    assert ("large.py", "exceeds maximum file size") in skipped
+    assert ("README.md", "excluded by pattern") in skipped
+
+
 # UrlRepoLoader Tests
 
 def test_url_repo_loader_init(url_loader):
@@ -136,92 +176,137 @@ def test_url_should_include(mock_filter, url_loader):
     mock_filter.assert_called_once()
 
 
-@patch("repo2readme.loaders.loader.GitLoader")
-@patch("repo2readme.loaders.loader.os.makedirs")
-@patch("repo2readme.loaders.loader.os.path.exists")
 @patch("repo2readme.loaders.loader.shutil.rmtree")
-def test_url_load_success(
-    mock_rmtree,
-    mock_exists,
-    mock_makedirs,
-    mock_gitloader,
-    url_loader,
-):
-    mock_exists.return_value = False
+@patch("repo2readme.loaders.loader.subprocess.run")
+@patch("repo2readme.loaders.loader.github_file_filter")
+def test_url_load_success(mock_filter, mock_subprocess, mock_rmtree, url_loader, tmp_path):
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
 
-    document = Document(
-        page_content="code",
-        metadata={"source": "src/main.py"},
-    )
+    # Create fake repo structure
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    src_dir = repo_dir / "src"
+    src_dir.mkdir()
+    main_file = src_dir / "main.py"
+    main_file.write_text("print('hello')", encoding="utf-8")
 
-    git_loader = MagicMock()
-    git_loader.load.return_value = [document]
-    mock_gitloader.return_value = git_loader
+    url_loader.temp_dir = str(repo_dir)
+    
+    docs, root, skipped = url_loader.load(return_skip_info=True)
 
-    docs, root = url_loader.load()
-
-    assert root.endswith("repo")
+    assert root == str(repo_dir)
     assert len(docs) == 1
+    assert docs[0].page_content == "print('hello')"
 
     metadata = docs[0].metadata
     assert metadata["file_name"] == "main.py"
     assert metadata["file_type"] == ".py"
-    
-    # Check normalized paths
     assert metadata["relative_path"] == "src/main.py"
-    assert metadata["file_path"].endswith("src/main.py")
+    assert metadata["file_path"] == str(main_file).replace("\\", "/")
+    
+    assert skipped == []
 
 
-@patch("repo2readme.loaders.loader.GitLoader")
-@patch("repo2readme.loaders.loader.os.makedirs")
-@patch("repo2readme.loaders.loader.os.path.exists")
-def test_url_load_missing_source_metadata(
-    mock_exists,
-    mock_makedirs,
-    mock_gitloader,
-    url_loader,
-):
-    """Tests that documents missing a 'source' key in metadata do not cause a crash."""
-    mock_exists.return_value = False
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+@patch("repo2readme.loaders.loader.github_file_filter")
+def test_url_load_returns_skipped_info(mock_filter, mock_subprocess, mock_rmtree, url_loader, tmp_path):
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    def filter_side_effect(path, *args, **kwargs):
+        if path == "node_modules":
+            return (False, "ignored by default rules")
+        elif path == "node_modules/package.json":
+            return (False, "ignored by default rules")
+        elif path == "large.py":
+            return (False, "exceeds maximum file size")
+        elif path == "README.md":
+            return (False, "excluded by pattern")
+        return (True, "")
 
-    document = Document(
-        page_content="code",
-        metadata={},
-    )
+    mock_filter.side_effect = filter_side_effect
 
-    git_loader = MagicMock()
-    git_loader.load.return_value = [document]
-    mock_gitloader.return_value = git_loader
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    (repo_dir / "README.md").write_text("# README", encoding="utf-8")
+    
+    large_file = repo_dir / "large.py"
+    large_file.write_text("x" * 2000, encoding="utf-8")
+    
+    node_modules = repo_dir / "node_modules"
+    node_modules.mkdir()
+    (node_modules / "package.json").write_text("{}", encoding="utf-8")
 
+    url_loader.temp_dir = str(repo_dir)
+    url_loader.max_file_size_kb = 1
+    url_loader.exclude_patterns = ["*.md"]
+    
+    docs, root, skipped = url_loader.load(return_skip_info=True)
+
+    assert len(docs) == 1
+    assert docs[0].metadata["relative_path"] == "main.py"
+    
+    # node_modules/ is pruned, so package.json is never encountered
+    assert len(skipped) == 3
+    assert ("node_modules/", "ignored by default rules") in skipped
+    assert ("large.py", "exceeds maximum file size") in skipped
+    assert ("README.md", "excluded by pattern") in skipped
+
+
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_load_missing_source_metadata(mock_subprocess, mock_rmtree, url_loader, tmp_path):
+    mock_subprocess.return_value = MagicMock(returncode=0)
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    main_file = repo_dir / "main.py"
+    main_file.write_text("code", encoding="utf-8")
+
+    url_loader.temp_dir = str(repo_dir)
+    
     docs, _ = url_loader.load()
 
     assert len(docs) == 1
-    assert "file_name" not in docs[0].metadata
-    assert "file_path" not in docs[0].metadata
+    assert docs[0].metadata["file_name"] == "main.py"
+    assert docs[0].metadata["file_path"] == str(main_file).replace("\\", "/")
 
 
-@patch("repo2readme.loaders.loader.GitLoader")
 @patch("repo2readme.loaders.loader.shutil.rmtree")
-@patch("repo2readme.loaders.loader.os.makedirs")
+@patch("repo2readme.loaders.loader.subprocess.run") 
 @patch("repo2readme.loaders.loader.os.path.exists")
-def test_url_load_removes_existing_temp_dir(
-    mock_exists,
-    mock_makedirs,
-    mock_rmtree,
-    mock_gitloader,
-    url_loader,
-):
-    """Ensures that if the temp directory already exists, it is removed before cloning."""
+def test_url_load_removes_existing_temp_dir(mock_exists, mock_subprocess, mock_rmtree, url_loader, tmp_path):
+    """Ensures that if the temp directory already exists, it is removed before loading."""
     mock_exists.return_value = True
+    mock_subprocess.return_value = MagicMock(returncode=0)
     
-    git_loader = MagicMock()
-    git_loader.load.return_value = []
-    mock_gitloader.return_value = git_loader
-
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "test.py").write_text("test", encoding="utf-8")
+    url_loader.temp_dir = str(repo_dir)
+    
     url_loader.load()
 
-    mock_rmtree.assert_called_once()
-    mock_makedirs.assert_called_once()
+    # Verify rmtree was called to remove the existing directory
+    mock_rmtree.assert_called()
+
+
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_load_clone_failure(mock_subprocess, url_loader):
+    # Mock subprocess.run to raise CalledProcessError when check=True is used
+    mock_subprocess.side_effect = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=["git", "clone", "--branch", "main", "--depth", "1", "https://github.com/user/repo.git", "/tmp/repo"],
+        stderr="fatal: repository not found"
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        url_loader.load()
+
+    assert "Failed to clone repository" in str(exc_info.value)
 
 
 @patch("repo2readme.loaders.loader.shutil.rmtree")

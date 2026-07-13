@@ -2,7 +2,8 @@ from __future__ import annotations
 import os
 import tempfile
 import shutil
-from langchain_community.document_loaders import TextLoader, GitLoader
+import subprocess
+from langchain_community.document_loaders import TextLoader
 
 from repo2readme.utils.filter import github_file_filter
 from repo2readme.utils.force_remove import force_remove
@@ -137,37 +138,90 @@ class UrlRepoLoader:
         )
         return allowed
 
-    def load(self):
+    def load(self, return_skip_info=False):
         repo_name = self.get_repo_name()
         base_temp = tempfile.gettempdir()
-        self.temp_dir = os.path.join(base_temp, repo_name)
+        default_temp_dir = os.path.join(base_temp, repo_name)
+        
+        # Only create a new temp directory if one wasn't already set (e.g., by tests)
+        if self.temp_dir is None:
+            self.temp_dir = default_temp_dir
 
+        # ALWAYS clean before cloning
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir, onerror=force_remove)
 
         os.makedirs(self.temp_dir, exist_ok=True)
 
-        loader = GitLoader(
-            repo_path=self.temp_dir,
-            clone_url=self.clone_url,
-            branch=self.branch,
-            file_filter=self._should_include,
-        )
+        # Clone repository using git command directly
+        try:
+            subprocess.run(
+                ["git", "clone", "--branch", self.branch, "--depth", "1", self.clone_url, self.temp_dir],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to clone repository: {e.stderr}") from e
 
-        docs = loader.load()
+        docs = []
+        skipped: list[tuple[str, str]] = [] if return_skip_info else []
 
-        for doc in docs:
-            source = doc.metadata.get("source")
+        for current, dirs, files in os.walk(self.temp_dir):
+            new_dirs = []
+            for directory in dirs:
+                full_dir_path = os.path.join(current, directory)
+                rel_dir_path = os.path.relpath(full_dir_path, self.temp_dir).replace("\\", "/")
 
-            if source:
-                full_path = os.path.join(self.temp_dir, source)
-                normalized_full_path = full_path.replace("\\", "/")
+                allowed, reason = github_file_filter(
+                    rel_dir_path,
+                    include_patterns=self.include_patterns,
+                    exclude_patterns=self.exclude_patterns,
+                    root_path=self.temp_dir,
+                    max_file_size_kb=None,
+                )
 
-                doc.metadata["file_path"] = normalized_full_path
-                doc.metadata["file_name"] = os.path.basename(source)
-                doc.metadata["file_type"] = os.path.splitext(source)[1].lower()
-                doc.metadata["relative_path"] = source.replace("\\", "/")
+                if allowed:
+                    new_dirs.append(directory)
+                elif return_skip_info:
+                    skipped.append((rel_dir_path + "/", reason))
 
+            dirs[:] = new_dirs
+
+            for file_name in files:
+                full_path = os.path.join(current, file_name)
+                rel_path = os.path.relpath(full_path, self.temp_dir).replace("\\", "/")
+
+                allowed, reason = github_file_filter(
+                    rel_path,
+                    include_patterns=self.include_patterns,
+                    exclude_patterns=self.exclude_patterns,
+                    root_path=self.temp_dir,
+                    max_file_size_kb=self.max_file_size_kb,
+                )
+
+                if not allowed:
+                    if return_skip_info:
+                        skipped.append((rel_path, reason))
+                    continue
+
+                try:
+                    loader = TextLoader(full_path, encoding="utf-8")
+                    loaded_docs = loader.load()
+
+                    for doc in loaded_docs:
+                        doc.metadata["file_path"] = full_path.replace("\\", "/")
+                        doc.metadata["file_name"] = file_name
+                        doc.metadata["file_type"] = os.path.splitext(file_name)[1].lower()
+                        doc.metadata["relative_path"] = rel_path
+
+                    docs.extend(loaded_docs)
+
+                except Exception as error:
+                    print(f"[ERROR] Cannot load {full_path}: {error}")
+
+        if return_skip_info:
+            return docs, self.temp_dir, skipped
         return docs, self.temp_dir
 
     def cleanup(self):
