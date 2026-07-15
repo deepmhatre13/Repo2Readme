@@ -72,6 +72,8 @@ EXTENSION_LANGUAGE_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # 2. FILENAME → LANGUAGE MAP (for common extensionless files)
 # ---------------------------------------------------------------------------
+# Note: cargo.toml, docker-compose.yml/yaml are omitted because extension
+# detection runs first, so they are unreachable.
 FILENAME_LANGUAGE_MAP: dict[str, str] = {
     "dockerfile": "dockerfile",
     "makefile": "makefile",
@@ -82,12 +84,9 @@ FILENAME_LANGUAGE_MAP: dict[str, str] = {
     "rakefile": "ruby",
     "brewfile": "ruby",
     "vagrantfile": "ruby",
-    "docker-compose.yml": "yaml",
-    "docker-compose.yaml": "yaml",
     # Additional common filenames
     "justfile": "just",
     "snakefile": "python",
-    "cargo.toml": "rust",
     "gemfile.lock": "ruby",
     "guardfile": "ruby",
     "capfile": "ruby",
@@ -178,17 +177,25 @@ SHEBANG_PATTERNS: list[tuple[re.Pattern, str]] = [
 # Each entry is a (language, list-of-markers) pair.
 # Markers are checked against the first 8 KB of content.
 # More specific markers should come first for each language.
+# Shared keywords (e.g. `def`, `class`) are omitted to avoid false positives
+# between similar-looking languages. Instead we use more distinctive tokens.
 CONTENT_RULES: list[tuple[str, list[str]]] = [
     # Dockerfile
     ("dockerfile", ["FROM ", "RUN ", "COPY ", "CMD ", "ENTRYPOINT "]),
     # Python
-    ("python", ['if __name__ == "__main__"', "def ", "import ", "from ", "class "]),
+    (
+        "python",
+        ["if __name__ ==", "import ", "from ", "self.", "def ", "class "],
+    ),
     # TypeScript
     ("typescript", ["interface ", "implements ", "readonly ", "type "]),
     # JavaScript (less specific than TypeScript, so listed after)
-    ("javascript", ["module.exports", "require(", "=>", "const ", "let ", "function "]),
+    (
+        "javascript",
+        ["module.exports", "require(", "=>", "const ", "let ", "function "],
+    ),
     # Shell
-    ("bash", ["#!/", "echo ", "export ", "fi", "then ", "done ", "else "]),
+    ("bash", ["#!/", "echo ", "export ", " fi\n", "\nfi\n", "then ", "done ", "else "]),
     # YAML
     ("yaml", ["---\n", ":\n  ", "  - ", ": "]),
     # JSON
@@ -200,7 +207,7 @@ CONTENT_RULES: list[tuple[str, list[str]]] = [
     # Makefile
     ("makefile", ["CC=", "CFLAGS=", "LDFLAGS=", "$@", "$<", ":=", "PHONY"]),
     # Ruby
-    ("ruby", ["require ", "gem ", "def ", "end", "module ", "class "]),
+    ("ruby", ["require ", "gem ", "puts ", "end\n", "module ", "class "]),
     # Perl
     ("perl", ["use strict", "use warnings", "my $", 'print "']),
     # PHP
@@ -304,11 +311,11 @@ def _read_file_content(file_path: str) -> Optional[str]:
         if b"\0" in raw:
             return None
 
-        # Decode with UTF-8 (fallback to latin-1)
+        # Decode with UTF-8 (ignore invalid bytes first; only fall back to latin-1 if needed)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
-            return raw.decode("latin-1")
+            return raw.decode("utf-8", errors="ignore")
 
     except (IOError, OSError, PermissionError):
         return None
