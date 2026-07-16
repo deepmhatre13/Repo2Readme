@@ -43,7 +43,7 @@ def test_local_traversal_skips_broken_symlink(tmp_path):
     broken_link.symlink_to(repo_dir / "nonexistent")
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     assert len(docs) == 1
     assert docs[0].metadata["relative_path"] == "main.py"
@@ -61,7 +61,7 @@ def test_local_traversal_skips_broken_symlink_dir(tmp_path):
     broken_dir_link.symlink_to(repo_dir / "does_not_exist", target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     assert len(docs) == 1
     assert docs[0].metadata["relative_path"] == "main.py"
@@ -83,7 +83,7 @@ def test_local_traversal_directory_symlink(tmp_path):
     link_dir.symlink_to(src_dir, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
     # Non-symlink directories are visited before symlinks; link_to_src/ is skipped as duplicate
@@ -103,7 +103,7 @@ def test_local_traversal_circular_symlink(tmp_path):
     loop_link.symlink_to(repo_dir / "A", target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     assert len(docs) == 1
     assert docs[0].metadata["relative_path"] == "main.py"
@@ -128,7 +128,7 @@ def test_local_traversal_multiple_symlinks_same_target(tmp_path):
     link2.symlink_to(src_dir, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
     # src/ is visited first; link1/ and link2/ are skipped as duplicates
@@ -154,7 +154,7 @@ def test_local_traversal_nested_symlinks(tmp_path):
     inner_link.symlink_to(src_dir, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
     # src/ is visited first; link_to_src/ and inner_link/ are skipped as duplicates
@@ -176,7 +176,7 @@ def test_local_traversal_file_symlink(tmp_path):
     file_link.symlink_to(original)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     paths = {doc.metadata["relative_path"] for doc in docs}
     assert paths == {
@@ -209,7 +209,7 @@ def test_local_traversal_symlink_duplicate_prevention(tmp_path):
     link2.symlink_to(src_dir, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root = loader.load()
+    docs, _root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
     # src/ is visited first; link1/, link2/ are skipped. nested/ is created inside link1/ but
@@ -242,9 +242,9 @@ def test_local_traversal_returns_skipped_info_for_symlinks(tmp_path):
     link2.symlink_to(src_dir, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root, skipped = loader.load(return_skip_info=True)
+    docs, _root, skipped = loader.load(return_skip_info=True)
 
-    rel_skipped = [(p if not p.endswith("/") else p, r) for p, r in skipped]
+    rel_skipped = [(p, r) for p, r in skipped]
     # broken is a file symlink, so no trailing slash
     assert ("broken", "broken symbolic link") in rel_skipped
     # link1/ and link2/ are skipped because src/ was visited first
@@ -268,11 +268,11 @@ def test_local_traversal_rejects_external_dir_symlink(tmp_path):
     bad.symlink_to(outside, target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root, skipped = loader.load(return_skip_info=True)
+    docs, _root, skipped = loader.load(return_skip_info=True)
 
     paths = [doc.metadata["relative_path"] for doc in docs]
     assert paths == ["main.py"]
-    assert ("bad/", "symbolic link outside repository") in [(p if not p.endswith("/") else p, r) for p, r in skipped]
+    assert ("bad/", "symbolic link outside repository") in [(p, r) for p, r in skipped]
 
 
 def test_local_traversal_rejects_external_file_symlink(tmp_path):
@@ -290,7 +290,7 @@ def test_local_traversal_rejects_external_file_symlink(tmp_path):
     bad.symlink_to(outside)
 
     loader = LocalRepoLoader(str(repo_dir))
-    docs, root, skipped = loader.load(return_skip_info=True)
+    docs, _root, skipped = loader.load(return_skip_info=True)
 
     paths = [doc.metadata["relative_path"] for doc in docs]
     assert paths == ["main.py"]
@@ -403,7 +403,7 @@ def test_url_traversal_rejects_external_dir_symlink(mock_subprocess, mock_rmtree
 
     paths = [doc.metadata["relative_path"] for doc in docs]
     assert paths == ["main.py"]
-    assert ("bad/", "symbolic link outside repository") in [(p if not p.endswith("/") else p, r) for p, r in skipped]
+    assert ("bad/", "symbolic link outside repository") in [(p, r) for p, r in skipped]
 
 
 @patch("repo2readme.loaders.loader.github_file_filter")
