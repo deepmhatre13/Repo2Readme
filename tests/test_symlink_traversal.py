@@ -169,17 +169,17 @@ def test_local_traversal_file_symlink(tmp_path):
     repo_dir.mkdir()
     (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
     
-    original = repo_dir / "data.txt"
+    original = repo_dir / "data.py"
     original.write_text("hello", encoding="utf-8")
     
-    file_link = repo_dir / "data_link.txt"
+    file_link = repo_dir / "data_link.py"
     file_link.symlink_to(original)
 
     loader = LocalRepoLoader(str(repo_dir))
     docs, root = loader.load()
 
     paths = {doc.metadata["relative_path"] for doc in docs}
-    assert paths == {"main.py", "data_link.txt"}
+    assert paths == {"main.py", "data_link.py"}
 
 
 def test_local_traversal_symlink_duplicate_prevention(tmp_path):
@@ -208,10 +208,12 @@ def test_local_traversal_symlink_duplicate_prevention(tmp_path):
     docs, root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
-    # src/ is visited first; link1/, link2/, and nested under link1 are all reachable under resolved src/
+    # src/ is visited first; link1/, link2/ are skipped. nested/ is created inside link1/ but
+    # link1/ resolves to src/ which is already visited, so link1/nested/ is never traversed.
     assert paths == sorted([
         "main.py",
         "src/a.py",
+        "src/nested/n.py",
     ])
 
 
@@ -239,7 +241,8 @@ def test_local_traversal_returns_skipped_info_for_symlinks(tmp_path):
     docs, root, skipped = loader.load(return_skip_info=True)
 
     rel_skipped = [(p if not p.endswith("/") else p, r) for p, r in skipped]
-    assert ("broken/", "broken symbolic link") in rel_skipped
+    # broken is a file symlink, so no trailing slash
+    assert ("broken", "broken symbolic link") in rel_skipped
     # link1/ and link2/ are skipped because src/ was visited first
     assert ("link1/", "circular or duplicate symbolic link") in rel_skipped
     assert ("link2/", "circular or duplicate symbolic link") in rel_skipped
