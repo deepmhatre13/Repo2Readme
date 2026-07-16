@@ -84,9 +84,9 @@ def test_local_traversal_directory_symlink(tmp_path):
     loader = LocalRepoLoader(str(repo_dir))
     docs, root = loader.load()
 
-    paths = {doc.metadata["relative_path"] for doc in docs}
-    # src/ is visited first; link_to_src/ resolves to the same canonical path and is skipped
-    assert paths == {"main.py", "src/helper.py"}
+    paths = sorted(doc.metadata["relative_path"] for doc in docs)
+    # Non-symlink directories are visited before symlinks; link_to_src/ is skipped as duplicate
+    assert paths == ["main.py", "src/helper.py"]
 
 
 def test_local_traversal_circular_symlink(tmp_path):
@@ -130,8 +130,8 @@ def test_local_traversal_multiple_symlinks_same_target(tmp_path):
     docs, root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
-    # link1/ is followed; link2/ resolves to same canonical path and is skipped
-    assert paths == sorted(["main.py", "link1/a.py", "link1/b.py"])
+    # src/ is visited first; link1/ and link2/ are skipped as duplicates
+    assert paths == sorted(["main.py", "src/a.py", "src/b.py"])
 
 
 def test_local_traversal_nested_symlinks(tmp_path):
@@ -156,9 +156,8 @@ def test_local_traversal_nested_symlinks(tmp_path):
     docs, root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
-    # link_to_src is followed; inner_link resolves to the same canonical src and is skipped
-    assert "link_to_src/inner.py" in paths
-    assert "link_to_src/inner_link/inner.py" not in paths
+    # src/ is visited first; link_to_src/ and inner_link/ are skipped as duplicates
+    assert paths == ["main.py", "src/inner.py"]
 
 
 def test_local_traversal_file_symlink(tmp_path):
@@ -208,11 +207,10 @@ def test_local_traversal_symlink_duplicate_prevention(tmp_path):
     docs, root = loader.load()
 
     paths = sorted(doc.metadata["relative_path"] for doc in docs)
-    # link1/ is followed; link2/ resolves to the same canonical path as src/ and is skipped
+    # src/ is visited first; link1/, link2/, and nested under link1 are all reachable under resolved src/
     assert paths == sorted([
         "main.py",
-        "link1/a.py",
-        "link1/nested/n.py",
+        "src/a.py",
     ])
 
 
@@ -241,4 +239,6 @@ def test_local_traversal_returns_skipped_info_for_symlinks(tmp_path):
 
     rel_skipped = [(p if not p.endswith("/") else p, r) for p, r in skipped]
     assert ("broken/", "broken symbolic link") in rel_skipped
-    assert any(p == "link2/" and r == "circular or duplicate symbolic link" for p, r in rel_skipped)
+    # link1/ and link2/ are skipped because src/ was visited first
+    assert ("link1/", "circular or duplicate symbolic link") in rel_skipped
+    assert ("link2/", "circular or duplicate symbolic link") in rel_skipped
