@@ -36,6 +36,13 @@ class LocalRepoLoader:
         )
         return allowed
 
+    def _is_within_root(self, path: str, root: str) -> bool:
+        try:
+            common = os.path.commonpath([path, root])
+            return common == root
+        except ValueError:
+            return False
+
     def load(self, return_skip_info=False):
         if not os.path.exists(self.folder_path):
             raise FileNotFoundError(f"Folder not found: {self.folder_path}")
@@ -48,7 +55,7 @@ class LocalRepoLoader:
 
         for current, dirs, files in os.walk(self.folder_path):
             new_dirs = []
-            dirs.sort(key=lambda d: (not os.path.islink(os.path.join(current, d)), d))
+            dirs.sort(key=lambda d: (os.path.islink(os.path.join(current, d)), d))
             for directory in dirs:
                 full_dir_path = os.path.join(current, directory)
                 rel_dir_path = os.path.relpath(full_dir_path, self.folder_path).replace("\\", "/")
@@ -79,6 +86,11 @@ class LocalRepoLoader:
                             skipped.append((rel_dir_path + "/", "broken symbolic link"))
                         continue
 
+                    if not self._is_within_root(resolved_path, root_resolved):
+                        if return_skip_info:
+                            skipped.append((rel_dir_path + "/", "symbolic link outside repository"))
+                        continue
+
                 visited_dirs.add(resolved_path)
                 new_dirs.append(directory)
 
@@ -88,10 +100,16 @@ class LocalRepoLoader:
                 full_path = os.path.join(current, file_name)
                 rel_path = os.path.relpath(full_path, self.folder_path).replace("\\", "/")
 
-                if os.path.islink(full_path) and not os.path.exists(full_path):
-                    if return_skip_info:
-                        skipped.append((rel_path, "broken symbolic link"))
-                    continue
+                if os.path.islink(full_path):
+                    resolved_path = os.path.realpath(full_path)
+                    if not os.path.exists(resolved_path):
+                        if return_skip_info:
+                            skipped.append((rel_path, "broken symbolic link"))
+                        continue
+                    if not self._is_within_root(resolved_path, root_resolved):
+                        if return_skip_info:
+                            skipped.append((rel_path, "symbolic link outside repository"))
+                        continue
 
                 allowed, reason = github_file_filter(
                     rel_path,
@@ -163,6 +181,13 @@ class UrlRepoLoader:
         )
         return allowed
 
+    def _is_within_root(self, path: str, root: str) -> bool:
+        try:
+            common = os.path.commonpath([path, root])
+            return common == root
+        except ValueError:
+            return False
+
     def load(self, return_skip_info=False):
         repo_name = self.get_repo_name()
         base_temp = tempfile.gettempdir()
@@ -197,7 +222,7 @@ class UrlRepoLoader:
 
         for current, dirs, files in os.walk(self.temp_dir):
             new_dirs = []
-            dirs.sort(key=lambda d: (not os.path.islink(os.path.join(current, d)), d))
+            dirs.sort(key=lambda d: (os.path.islink(os.path.join(current, d)), d))
             for directory in dirs:
                 full_dir_path = os.path.join(current, directory)
                 rel_dir_path = os.path.relpath(full_dir_path, self.temp_dir).replace("\\", "/")
@@ -228,6 +253,11 @@ class UrlRepoLoader:
                             skipped.append((rel_dir_path + "/", "broken symbolic link"))
                         continue
 
+                    if not self._is_within_root(resolved_path, root_resolved):
+                        if return_skip_info:
+                            skipped.append((rel_dir_path + "/", "symbolic link outside repository"))
+                        continue
+
                 visited_dirs.add(resolved_path)
                 new_dirs.append(directory)
 
@@ -237,10 +267,16 @@ class UrlRepoLoader:
                 full_path = os.path.join(current, file_name)
                 rel_path = os.path.relpath(full_path, self.temp_dir).replace("\\", "/")
 
-                if os.path.islink(full_path) and not os.path.exists(full_path):
-                    if return_skip_info:
-                        skipped.append((rel_path, "broken symbolic link"))
-                    continue
+                if os.path.islink(full_path):
+                    resolved_path = os.path.realpath(full_path)
+                    if not os.path.exists(resolved_path):
+                        if return_skip_info:
+                            skipped.append((rel_path, "broken symbolic link"))
+                        continue
+                    if not self._is_within_root(resolved_path, root_resolved):
+                        if return_skip_info:
+                            skipped.append((rel_path, "symbolic link outside repository"))
+                        continue
 
                 allowed, reason = github_file_filter(
                     rel_path,

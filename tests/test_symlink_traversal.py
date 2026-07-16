@@ -1,5 +1,6 @@
 import pytest
-from repo2readme.loaders.loader import LocalRepoLoader
+from unittest.mock import MagicMock, patch
+from repo2readme.loaders.loader import LocalRepoLoader, UrlRepoLoader
 
 
 def _skip_if_no_symlink_support(tmp_path):
@@ -57,7 +58,7 @@ def test_local_traversal_skips_broken_symlink_dir(tmp_path):
     (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
     
     broken_dir_link = repo_dir / "bad_dir_link"
-    broken_dir_link.symlink_to(repo_dir / "does_not_exist")
+    broken_dir_link.symlink_to(repo_dir / "does_not_exist", target_is_directory=True)
 
     loader = LocalRepoLoader(str(repo_dir))
     docs, root = loader.load()
@@ -242,3 +243,181 @@ def test_local_traversal_returns_skipped_info_for_symlinks(tmp_path):
     # link1/ and link2/ are skipped because src/ was visited first
     assert ("link1/", "circular or duplicate symbolic link") in rel_skipped
     assert ("link2/", "circular or duplicate symbolic link") in rel_skipped
+
+
+def test_local_traversal_rejects_external_dir_symlink(tmp_path):
+    """Directory symlinks pointing outside the repo are rejected."""
+    _skip_if_no_symlink_support(tmp_path)
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    
+    bad = repo_dir / "bad"
+    bad.symlink_to(outside, target_is_directory=True)
+
+    loader = LocalRepoLoader(str(repo_dir))
+    docs, root, skipped = loader.load(return_skip_info=True)
+
+    paths = [doc.metadata["relative_path"] for doc in docs]
+    assert paths == ["main.py"]
+    assert ("bad/", "symbolic link outside repository") in [(p if not p.endswith("/") else p, r) for p, r in skipped]
+
+
+def test_local_traversal_rejects_external_file_symlink(tmp_path):
+    """File symlinks pointing outside the repo are rejected."""
+    _skip_if_no_symlink_support(tmp_path)
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    
+    bad = repo_dir / "bad.txt"
+    bad.symlink_to(outside)
+
+    loader = LocalRepoLoader(str(repo_dir))
+    docs, root, skipped = loader.load(return_skip_info=True)
+
+    paths = [doc.metadata["relative_path"] for doc in docs]
+    assert paths == ["main.py"]
+    assert ("bad.txt", "symbolic link outside repository") in skipped
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://github.com/user/repo", "repo"),
+        ("https://github.com/user/repo.git", "repo"),
+        ("https://github.com/org/project.git/", "project"),
+        ("https://github.com/user/repo.git/", "repo"),
+        ("https://github.com/user/repo///", "repo"),
+    ],
+)
+def test_url_repo_loader_get_repo_name(url, expected):
+    assert UrlRepoLoader(url).get_repo_name() == expected
+
+
+@patch("repo2readme.loaders.loader.github_file_filter")
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_traversal_normal(mock_subprocess, mock_rmtree, mock_filter, tmp_path):
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    (repo_dir / "sub").mkdir()
+    (repo_dir / "sub" / "utils.py").write_text("x = 1", encoding="utf-8")
+    
+    loader = UrlRepoLoader("https://github.com/user/repo.git")
+    loader.temp_dir = str(repo_dir)
+    docs, root = loader.load()
+
+    assert root == str(repo_dir)
+    assert len(docs) == 2
+    paths = {doc.metadata["relative_path"] for doc in docs}
+    assert paths == {"main.py", "sub/utils.py"}
+
+
+@patch("repo2readme.loaders.loader.github_file_filter")
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_traversal_circular_symlink(mock_subprocess, mock_rmtree, mock_filter, tmp_path):
+    _skip_if_no_symlink_support(tmp_path)
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    (repo_dir / "A").mkdir()
+    (repo_dir / "A" / "loop").symlink_to(repo_dir / "A", target_is_directory=True)
+    
+    loader = UrlRepoLoader("https://github.com/user/repo.git")
+    loader.temp_dir = str(repo_dir)
+    docs, root = loader.load()
+
+    assert len(docs) == 1
+    assert docs[0].metadata["relative_path"] == "main.py"
+
+
+@patch("repo2readme.loaders.loader.github_file_filter")
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_traversal_multiple_symlinks_same_target(mock_subprocess, mock_rmtree, mock_filter, tmp_path):
+    _skip_if_no_symlink_support(tmp_path)
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    src_dir = repo_dir / "src"
+    src_dir.mkdir()
+    (src_dir / "a.py").write_text("a = 1", encoding="utf-8")
+    (repo_dir / "link1").symlink_to(src_dir, target_is_directory=True)
+    (repo_dir / "link2").symlink_to(src_dir, target_is_directory=True)
+    
+    loader = UrlRepoLoader("https://github.com/user/repo.git")
+    loader.temp_dir = str(repo_dir)
+    docs, root = loader.load()
+
+    paths = sorted(doc.metadata["relative_path"] for doc in docs)
+    assert paths == ["main.py", "src/a.py"]
+
+
+@patch("repo2readme.loaders.loader.github_file_filter")
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_traversal_rejects_external_dir_symlink(mock_subprocess, mock_rmtree, mock_filter, tmp_path):
+    _skip_if_no_symlink_support(tmp_path)
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    (repo_dir / "bad").symlink_to(outside, target_is_directory=True)
+    
+    loader = UrlRepoLoader("https://github.com/user/repo.git")
+    loader.temp_dir = str(repo_dir)
+    docs, root, skipped = loader.load(return_skip_info=True)
+
+    paths = [doc.metadata["relative_path"] for doc in docs]
+    assert paths == ["main.py"]
+    assert ("bad/", "symbolic link outside repository") in [(p if not p.endswith("/") else p, r) for p, r in skipped]
+
+
+@patch("repo2readme.loaders.loader.github_file_filter")
+@patch("repo2readme.loaders.loader.shutil.rmtree")
+@patch("repo2readme.loaders.loader.subprocess.run")
+def test_url_traversal_rejects_external_file_symlink(mock_subprocess, mock_rmtree, mock_filter, tmp_path):
+    _skip_if_no_symlink_support(tmp_path)
+    mock_filter.return_value = (True, "")
+    mock_subprocess.return_value = MagicMock(returncode=0)
+    
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "main.py").write_text("print('hello')", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (repo_dir / "bad.txt").symlink_to(outside)
+    
+    loader = UrlRepoLoader("https://github.com/user/repo.git")
+    loader.temp_dir = str(repo_dir)
+    docs, root, skipped = loader.load(return_skip_info=True)
+
+    paths = [doc.metadata["relative_path"] for doc in docs]
+    assert paths == ["main.py"]
+    assert ("bad.txt", "symbolic link outside repository") in skipped
