@@ -125,7 +125,7 @@ class LocalRepoLoader:
                     continue
 
                 try:
-                    loader = TextLoader(full_path, encoding="utf-8")
+                    loader = TextLoader(full_path, autodetect_encoding=True)
                     loaded_docs = loader.load()
 
                     for doc in loaded_docs:
@@ -138,6 +138,8 @@ class LocalRepoLoader:
 
                 except Exception as error:
                     print(f"[ERROR] Cannot load {full_path}: {error}")
+                    if return_skip_info:
+                        skipped.append((rel_path, f"load_error: {error}"))
 
         if return_skip_info:
             return docs, self.folder_path, skipped
@@ -290,9 +292,8 @@ class UrlRepoLoader:
                     if return_skip_info:
                         skipped.append((rel_path, reason))
                     continue
-
                 try:
-                    loader = TextLoader(full_path, encoding="utf-8")
+                    loader = TextLoader(full_path, autodetect_encoding=True)
                     loaded_docs = loader.load()
 
                     for doc in loaded_docs:
@@ -305,6 +306,9 @@ class UrlRepoLoader:
 
                 except Exception as error:
                     print(f"[ERROR] Cannot load {full_path}: {error}")
+                    if return_skip_info:
+                        skipped.append((rel_path, f"load_error: {error}"))
+
 
         if return_skip_info:
             return docs, self.temp_dir, skipped
